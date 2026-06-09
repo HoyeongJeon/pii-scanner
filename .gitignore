@@ -1,0 +1,30 @@
+# === 보안: 실제 데이터·스캔 결과는 절대 커밋 금지 ===
+# 실제 PII, 자격증명, 스캔 리포트는 내부(신뢰) 환경에만 둔다 (repo 커밋 금지)
+/reports/
+*.report.xlsx
+*.report.csv
+*.report.html
+scan_output/
+*.secret
+.env
+credentials*
+
+# 실제 문서 샘플 (합성 데이터만 tests/fixtures 에 둘 것)
+/data/
+/real_samples/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# === OS / 에디터 ===
+.DS_Store
+.idea/
+.vscode/
