@@ -26,3 +26,8 @@ def test_rrn_gender_not_claimed_by_foreign():
 def test_foreign_back_masked_is_masked():
     h = find_one("900101-5******")
     assert h.status is Status.MASKED
+
+
+def test_foreign_future_birth_year_dropped():
+    # 외국인 성별코드 7 = 2000년대 + 990101 → 2099년생 → 미래 → 드롭(상속된 가드)
+    assert list(ForeignDetector().find("9901017000008")) == []

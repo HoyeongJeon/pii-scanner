@@ -16,11 +16,14 @@ dependencies = [
     "openpyxl>=3.1.0",
     "pdfminer.six>=20231228",
     "Jinja2>=3.1.0",
+    "xlrd>=2.0.1",
 ]
 
 [project.optional-dependencies]
-hwp = ["pyhwp>=0.1b15"]   # .hwp 바이너리 지원 (선택적·지연 import)
-dev = ["pytest>=8.0", "reportlab>=4.0"]
+hwp = ["pyhwp>=0.1b15", "six>=1.16"]   # .hwp 바이너리 지원 (pyhwp는 six 전이의존성 필요)
+dropbox = ["dropbox>=11.36"]            # Dropbox API 커넥터(읽기 전용)
+ocr = ["pytesseract>=0.3.10", "Pillow>=10.0", "pdf2image>=1.17"]  # 이미지/스캔본PDF OCR (별도 시스템 패키지 필요: tesseract, poppler-utils)
+dev = ["pytest>=8.0", "reportlab>=4.0", "dropbox>=11.36", "xlwt>=1.3.0", "pytesseract>=0.3.10", "Pillow>=10.0", "pdf2image>=1.17"]
 
 [project.scripts]
 pii-scan = "pii_scanner.cli:main"

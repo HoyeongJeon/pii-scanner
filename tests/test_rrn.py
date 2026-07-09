@@ -1,4 +1,5 @@
 from pii_scanner.core.detectors.rrn import RrnDetector
+from pii_scanner.core.checksum import rrn_checksum_valid
 from pii_scanner.core.models import Status, Confidence, PiiType, RiskLevel
 
 D = RrnDetector()
@@ -48,3 +49,83 @@ def test_front_masked_back_exposed_is_exposed():
 def test_foreign_gender_code_not_claimed_by_rrn():
     # 성별코드 5 → 외국인 → RRN 탐지기는 잡지 않음
     assert list(D.find("900101-5234561")) == []
+
+
+def test_valid_checksum_but_impossible_month_dropped():
+    # 체크섬은 우연히 맞지만 13월 — 불가능한 날짜라 주민번호 아님(날짜 검증으로 드롭)
+    assert rrn_checksum_valid("9013011234565")          # 전제: 체크섬은 통과
+    assert list(D.find("9013011234565")) == []          # 그래도 13월이라 드롭
+
+
+def test_valid_checksum_but_impossible_day_dropped():
+    # 체크섬 통과하지만 32일 — 불가능한 날짜
+    assert rrn_checksum_valid("9001321234565")
+    assert list(D.find("9001321234565")) == []
+
+
+def test_valid_date_and_checksum_still_detected():
+    # 1990-01-01 유효 날짜 + 유효 체크섬 → 정상 탐지(과잉 드롭 방지)
+    h = find_one("900101-1234568")
+    assert h.pii_type is PiiType.RRN
+
+
+def test_front_masked_still_detected_despite_no_date_check():
+    # 앞자리가 가려지면 날짜 검증 불가 → 드롭하지 않음(뒤가 노출이면 탐지)
+    h = find_one("******-1234567")
+    assert h.status is Status.EXPOSED
+
+
+def test_future_birth_year_dropped():
+    # 성별코드 3 = 2000년대 출생인데 앞이 99 → 2099년생 = 불가능 → 드롭
+    assert list(D.find("9901013000007")) == []
+
+
+def test_past_birth_year_kept():
+    # 성별코드 3 + 200101 → 2020년생 → 미래 아님 → 정상 탐지
+    hits = list(D.find("2001013000004"))
+    assert len(hits) == 1
+    assert hits[0].status is Status.EXPOSED
+
+
+def test_reference_year_controls_future_drop():
+    # 2099년생: 기준연도 2098 이면 미래라 드롭, 2100 이면 미래 아니라 유지
+    assert list(RrnDetector(reference_year=2098).find("9901013000007")) == []
+    assert len(list(RrnDetector(reference_year=2100).find("9901013000007"))) == 1
+
+
+def test_masked_gender_with_future_front_is_kept():
+    # 앞자리는 99(미래연도처럼 보임)지만 성별코드가 가려져 세기를 알 수 없음
+    # → 미래 판정 불가 → 드롭하면 안 됨(진짜 RRN 누락 방지). gender-게이트 회귀 가드.
+    h = find_one("990101-*123456")
+    assert h.status is Status.EXPOSED
+
+
+def test_corp_reg_number_demoted_to_presumed():
+    # RRN 체크섬 AND 법인 체크섬 둘 다 통과 → 법인번호 의심 → 추정 강등(드롭 안 함)
+    h = find_one("9001011000006")
+    assert h.status is Status.EXPOSED
+    assert h.confidence is Confidence.PRESUMED
+    assert h.snippet == "900101-1******"      # 원문 미노출 유지
+
+
+def test_pure_rrn_stays_confirmed():
+    # RRN 체크섬 통과, 법인 체크섬 실패 → 순수 주민번호 → confirmed 유지(회귀 없음)
+    h = find_one("9001011000011")
+    assert h.status is Status.EXPOSED
+    assert h.confidence is Confidence.CONFIRMED
+
+
+def test_corp_suspect_flag_marked_on_double_checksum():
+    h = find_one("9001011000006")           # RRN+법인 양쪽 체크섬 통과
+    assert h.corp_suspect is True
+    assert h.confidence is Confidence.PRESUMED   # 기존 강등 유지
+
+
+def test_pure_rrn_not_corp_suspect():
+    h = find_one("9001011000011")           # RRN만 통과
+    assert h.corp_suspect is False
+
+
+def test_masked_hit_never_corp_suspect():
+    h = find_one("900101-1******")          # 부분 마스킹 — 체크섬 검증 불가
+    assert h.corp_suspect is False

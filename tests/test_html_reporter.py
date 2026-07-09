@@ -38,3 +38,29 @@ def test_html_escapes_path_metacharacters(tmp_path):
     # 이스케이프된 형태로 존재해야 함
     assert "&lt;b&gt;" in html
     assert "&amp;" in html
+
+
+def test_html_hits_table_shows_location(tmp_path):
+    sr = ScanResult()
+    fr = FileResult(path="/x/a.pdf")
+    fr.hits.append(PiiHit(PiiType.EMAIL, Status.EXPOSED, "ho****@x.com", 0, 12,
+                          Confidence.CONFIRMED, RiskLevel.MEDIUM,
+                          location="p.2 L5"))
+    sr.files.append(fr)
+    out = tmp_path / "r.html"
+    write_html(sr, str(out))
+    html = out.read_text(encoding="utf-8")
+    assert "위치" in html          # 컬럼 헤더
+    assert "p.2 L5" in html        # 위치 값
+
+
+def test_html_shows_corp_filtered_card(tmp_path):
+    sr = ScanResult()
+    fr = FileResult(path="/x/a.xlsx")
+    fr.corp_filtered = 7
+    sr.files.append(fr)
+    out = tmp_path / "r.html"
+    write_html(sr, str(out))
+    html = out.read_text(encoding="utf-8")
+    assert "법인번호 오탐 제거" in html
+    assert ">7<" in html

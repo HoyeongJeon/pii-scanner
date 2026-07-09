@@ -1,6 +1,7 @@
 import openpyxl
 from pii_scanner.core.scanner import scan_paths
 from pii_scanner.config import ScanConfig
+from pii_scanner.core.extractors.base import Extractor
 from pii_scanner.reporters.excel import write_excel
 from pii_scanner.reporters.html import write_html
 
@@ -62,3 +63,60 @@ def test_html_has_no_raw_pii(tmp_path):
     blob = out.read_text(encoding="utf-8")
     for secret in RAW_SECRETS:
         assert secret not in blob, f"원문 유출: {secret}"
+
+
+def test_state_jsonl_has_no_raw_pii(tmp_path):
+    from pii_scanner.connectors.local_fs import LocalFsConnector
+    from pii_scanner.connectors.state import ScanState
+    from pii_scanner.core.scanner import scan
+
+    src = _make_src(tmp_path)
+    st = ScanState("sec", base_dir=str(tmp_path / "state"))
+    scan(LocalFsConnector([str(src)]), ScanConfig(), state=st)
+    blob = open(st.jsonl_path, encoding="utf-8").read()
+    for secret in RAW_SECRETS:
+        assert secret not in blob, f"상태파일 원문 유출: {secret}"
+
+
+def test_parallel_state_jsonl_has_no_raw_pii(tmp_path, monkeypatch):
+    # 병렬 경로(scan_parallel)도 상태파일에 마스킹 스니펫만 남겨야 한다.
+    from pii_scanner.connectors.base import SourceFile, Connector
+    from pii_scanner.connectors.state import ScanState
+    from pii_scanner.core.scanner import scan_parallel
+    import pii_scanner.core.scanner as scn
+
+    src = _make_src(tmp_path)
+    text = (src / "a.txt").read_text(encoding="utf-8")
+
+    class _SF(SourceFile):
+        def __init__(self, p): self.logical_path = p
+        def __enter__(self): return self.logical_path
+        def __exit__(self, *exc): pass
+    class _Conn(Connector):
+        def iter_files(self, config):
+            yield _SF("/d/a.txt")
+    class _Ext(Extractor):
+        def extract(self, local): return text
+    monkeypatch.setattr(scn, "get_extractor", lambda path: _Ext())
+
+    st = ScanState("secpar", base_dir=str(tmp_path / "state"))
+    scan_parallel(_Conn(), ScanConfig(), state=st, max_workers=4)
+    blob = open(st.jsonl_path, encoding="utf-8").read()
+    for secret in RAW_SECRETS:
+        assert secret not in blob, f"병렬 상태파일 원문 유출: {secret}"
+
+
+def test_dropbox_temp_is_outside_any_sync_folder():
+    import os, tempfile
+    import pytest
+    pytest.importorskip("dropbox")
+    from unittest.mock import MagicMock
+    from pii_scanner.connectors.dropbox_conn import DropboxSourceFile
+
+    dbx = MagicMock()
+    dbx.files_download_to_file.side_effect = lambda local, path: open(local, "wb").close()
+    sf = DropboxSourceFile(dbx, "/팀/a.txt", "/팀/a.txt")
+    with sf as local:
+        # 시스템 temp(동기화 폴더 밖). 'Dropbox' 경로 조각이 들어가면 안 됨.
+        assert local.startswith(tempfile.gettempdir())
+        assert "Dropbox" not in local and "dropbox" not in os.path.dirname(local).lower()

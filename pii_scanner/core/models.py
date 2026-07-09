@@ -40,6 +40,8 @@ class PiiHit:
     end: int
     confidence: Confidence
     risk: RiskLevel
+    location: str | None = None   # "Sheet1!AB71762" / "p.3 L12" / "L42" — 스캐너가 주입
+    corp_suspect: bool = False    # 법인 체크섬도 통과(법인번호 의심) — 내부 판별용, 리포트/state 미기록
 
 
 @dataclass
@@ -47,6 +49,8 @@ class FileResult:
     path: str
     hits: list[PiiHit] = field(default_factory=list)
     error: str | None = None
+    encrypted: bool = False
+    corp_filtered: int = 0   # 법인등록번호 열 오탐으로 제거된 hit 수 (summary 집계용)
 
 
 @dataclass

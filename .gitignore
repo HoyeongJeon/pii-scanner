@@ -8,6 +8,7 @@ scan_output/
 *.secret
 .env
 credentials*
+!pii_scanner/connectors/credentials.py
 
 # 실제 문서 샘플 (합성 데이터만 tests/fixtures 에 둘 것)
 /data/

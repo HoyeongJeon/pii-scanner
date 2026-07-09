@@ -14,7 +14,7 @@ def write_excel(result: ScanResult, out_path: str) -> None:
     ws = wb.active
     ws.title = "findings"
     ws.append([
-        "파일경로", "파일명", "PII종류", "위험등급", "상태", "마스킹스니펫", "검증",
+        "파일경로", "파일명", "PII종류", "위험등급", "상태", "마스킹스니펫", "위치", "검증",
     ])
     for fr in result.files:
         for h in fr.hits:
@@ -25,6 +25,7 @@ def write_excel(result: ScanResult, out_path: str) -> None:
                 h.risk.value,
                 h.status.value,
                 h.snippet,          # 마스킹 스니펫 — 원문 아님
+                h.location or "",
                 h.confidence.value,
             ])
 
@@ -34,14 +35,22 @@ def write_excel(result: ScanResult, out_path: str) -> None:
         if fr.error:
             we.append([fr.path, fr.error])
 
+    wenc = wb.create_sheet("encrypted")
+    wenc.append(["파일경로"])
+    for fr in result.files:
+        if fr.encrypted:
+            wenc.append([fr.path])
+
     s = summarize(result)
     wsum = wb.create_sheet("summary")
     wsum.append(["항목", "값"])
     wsum.append(["스캔 파일 수", s.total_files])
     wsum.append(["추출 실패 수", s.error_files])
+    wsum.append(["암호화 건너뜀 수", s.encrypted_files])
     wsum.append(["노출(EXPOSED)", s.exposed])
     wsum.append(["마스킹(MASKED)", s.masked])
     wsum.append(["마스킹률(%)", round(s.masking_rate, 1)])
+    wsum.append(["법인등록번호 오탐 제거", s.corp_filtered])
     wsum.append([])
     wsum.append(["PII종류", "노출", "마스킹"])
     for pii_type, b in s.by_type.items():

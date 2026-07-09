@@ -4,9 +4,12 @@ import os
 
 from pii_scanner.core.extractors.plaintext import PlaintextExtractor
 from pii_scanner.core.extractors.hwpx import HwpxExtractor
-from pii_scanner.core.extractors.office import DocxExtractor, XlsxExtractor
+from pii_scanner.core.extractors.office import DocxExtractor, XlsxExtractor, XlsExtractor
 from pii_scanner.core.extractors.pdf import PdfExtractor
 from pii_scanner.core.extractors.hwp import HwpExtractor
+from pii_scanner.core.extractors.ocr import ImageOcrExtractor
+from pii_scanner.core.extractors.base import EncryptedFileError
+
 
 
 class UnsupportedFormat(Exception):
@@ -19,8 +22,12 @@ _MAP = {
     ".hwpx": HwpxExtractor,
     ".docx": DocxExtractor,
     ".xlsx": XlsxExtractor,
+    ".xls": XlsExtractor,
     ".pdf": PdfExtractor,
     ".hwp": HwpExtractor,
+    ".png": ImageOcrExtractor,
+    ".jpg": ImageOcrExtractor,
+    ".jpeg": ImageOcrExtractor,
 }
 
 

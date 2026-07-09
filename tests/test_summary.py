@@ -28,3 +28,11 @@ def test_masking_rate_and_counts():
 def test_zero_pii_gives_100_percent():
     s = summarize(ScanResult())
     assert s.masking_rate == 100.0
+
+
+def test_summary_sums_corp_filtered():
+    sr = ScanResult()
+    a = FileResult(path="/x/a.xlsx"); a.corp_filtered = 3
+    b = FileResult(path="/x/b.xls");  b.corp_filtered = 2
+    sr.files.extend([a, b])
+    assert summarize(sr).corp_filtered == 5

@@ -24,6 +24,8 @@ th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}
   <div class="card">노출 건수<div class="v">{{ s.exposed }}</div></div>
   <div class="card">마스킹률<div class="v">{{ "%.1f"|format(s.masking_rate) }}%</div></div>
   <div class="card">추출 실패<div class="v">{{ s.error_files }}</div></div>
+  <div class="card">암호화 건너뜀<div class="v">{{ s.encrypted_files }}</div></div>
+  <div class="card">법인번호 오탐 제거<div class="v">{{ s.corp_filtered }}</div></div>
 </div>
 <h2>PII 종류별</h2>
 <table><tr><th>종류</th><th>노출</th><th>마스킹</th></tr>
@@ -38,11 +40,19 @@ th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}
 {% endfor %}
 </table>
 <h2>탐지 목록 (마스킹됨)</h2>
-<table><tr><th>파일</th><th>종류</th><th>마스킹값</th><th>상태</th></tr>
-{% for path, ptype, masked, status in hits %}
-<tr><td>{{ path }}</td><td>{{ ptype }}</td><td>{{ masked }}</td><td>{{ status }}</td></tr>
+<table><tr><th>파일</th><th>종류</th><th>마스킹값</th><th>상태</th><th>위치</th></tr>
+{% for path, ptype, masked, status, loc in hits %}
+<tr><td>{{ path }}</td><td>{{ ptype }}</td><td>{{ masked }}</td><td>{{ status }}</td><td>{{ loc }}</td></tr>
 {% endfor %}
 </table>
+{% if encrypted %}
+<h2>🔒 암호화로 건너뛴 파일 (스캔 못 함)</h2>
+<table><tr><th>파일</th></tr>
+{% for path in encrypted %}
+<tr><td>{{ path }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
 </body></html>"""
 )
 
@@ -51,18 +61,23 @@ def write_html(result: ScanResult, out_path: str) -> None:
     s = summarize(result)
     top = []
     hits = []
+    encrypted = []
     for fr in result.files:
+        if fr.encrypted:
+            encrypted.append(fr.path)
         n = sum(1 for h in fr.hits if h.status is Status.EXPOSED)
         if n:
             top.append((fr.path, n))
         for h in fr.hits:
-            hits.append((fr.path, h.pii_type.value, h.snippet, h.status.value))
+            hits.append((fr.path, h.pii_type.value, h.snippet, h.status.value,
+                         h.location or ""))
     top.sort(key=lambda x: x[1], reverse=True)
     html = _TEMPLATE.render(
         s=s,
         by_type=[(t.value, b) for t, b in s.by_type.items()],
         top=top[:20],
         hits=hits,
+        encrypted=encrypted,
     )
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
