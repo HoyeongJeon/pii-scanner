@@ -59,7 +59,7 @@ def test_extractor_default_extract_located_returns_line_locator():
 def test_line_locator_labels_many_hits_in_large_text_without_quadratic_cost():
     """행마다 hit 이 있는 대용량 CSV 시나리오 — hit 당 전체 재스캔이면 분 단위로 폭발한다(T-017).
 
-    실측: 기업연구소 대장 CSV 4건이 각각 30분+ 정체 → 감시견이 교착으로 판정·스킵.
+    실측: 행마다 연락처가 있는 대형 CSV 4건이 각각 30분+ 정체 → 감시견이 교착으로 판정·스킵.
     """
     text = "".join(f"row{i},02-3456-{i % 10000:04d}\n" for i in range(60000))   # ~1.5MB
     offsets = list(range(0, len(text), max(1, len(text) // 60000)))
