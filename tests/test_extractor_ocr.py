@@ -37,7 +37,7 @@ def test_ocr_image_reads_korea():
 def test_ocr_image_normalizes_unsupported_formats_and_modes():
     """MPO(폰 연사 JPEG)·CMYK 등 pytesseract 미지원 포맷/모드는 정규화 후 OCR — 예외 없이 통과 (T-013).
 
-    실측: ★업무폴더 오류 621건 중 498건이 MPO TypeError, 27건이 CMYK PNG 저장 실패.
+    실측: 어느 대형 스캔의 추출 실패 대부분이 MPO TypeError, 나머지가 CMYK PNG 저장 실패였다.
     """
     mpo = Image.new("RGB", (80, 24), "white")
     mpo.format = "MPO"                    # PIL이 폰 사진을 여는 실제 상태 재현

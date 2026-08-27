@@ -24,15 +24,15 @@ def test_luhn_invalid_card():
 
 
 def test_corp_reg_checksum_valid_real_number():
-    # 삼성전자 법인등록번호 130111-0006246 (공개 등기정보)
-    assert corp_reg_checksum_valid("1301110006246")
+    # 합성 법인등록번호 — 체크섬 규칙을 만족하도록 만든 값(실존 기업 번호 사용 금지)
+    assert corp_reg_checksum_valid("1101110006240")
 
 
 def test_corp_reg_checksum_invalid_check_digit():
-    assert not corp_reg_checksum_valid("1301110006247")  # 마지막 자리 변조
+    assert not corp_reg_checksum_valid("1101110006241")  # 마지막 자리 변조
 
 
 def test_corp_reg_checksum_rejects_non_13_digits():
     assert not corp_reg_checksum_valid("12345")
-    assert not corp_reg_checksum_valid("13011100062460")   # 14자리
-    assert not corp_reg_checksum_valid("130111000624X")    # 비숫자
+    assert not corp_reg_checksum_valid("11011100062400")   # 14자리
+    assert not corp_reg_checksum_valid("110111000624X")    # 비숫자
