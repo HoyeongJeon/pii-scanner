@@ -67,6 +67,27 @@ def test_scan_parallel_records_each_file_once(tmp_path, monkeypatch):
     assert len(recorded) == len(set(recorded))
 
 
+def test_state_backed_run_does_not_accumulate_results_in_ram(tmp_path, monkeypatch):
+    """state가 있으면 결과는 state에만 적재하고 반환 ScanResult에는 쌓지 않는다.
+
+    장기 실행(수만 파일)에서 반환용 램 누적이 OOM을 유발(T-012) — state 경로의 모든
+    소비자는 이미 state.load_results()를 쓰므로(T-008) 반환 files는 비어 있어야 한다.
+    """
+    _patch_ext(monkeypatch, {"/d/a.txt": "주민 900101-1234568",
+                             "/d/b.txt": "폰 010-1234-5678"})
+    st = ScanState("noram", base_dir=str(tmp_path))
+    result = scan_parallel(_BatchConn([[_FakeSF("/d/a.txt"), _FakeSF("/d/b.txt")]]),
+                           ScanConfig(), state=st, max_workers=2)
+    assert result.files == []
+    recorded = ScanState("noram", base_dir=str(tmp_path)).load_results().files
+    assert sorted(fr.path for fr in recorded) == ["/d/a.txt", "/d/b.txt"]
+
+    st_seq = ScanState("noram-seq", base_dir=str(tmp_path))
+    result_seq = scan(_BatchConn([[_FakeSF("/d/a.txt")]]), ScanConfig(), state=st_seq)
+    assert result_seq.files == []
+    assert st_seq.is_done("/d/a.txt")
+
+
 def test_scan_parallel_skips_done_on_resume(tmp_path, monkeypatch):
     _patch_ext(monkeypatch, {"/d/a.txt": "주민 900101-1234568",
                              "/d/b.txt": "폰 010-1234-5678"})

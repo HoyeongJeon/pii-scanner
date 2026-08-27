@@ -92,7 +92,16 @@ class ScanState:
             f.write(json.dumps(_fr_to_dict(fr), ensure_ascii=False) + "\n")
         self.done.add(fr.path)
 
+    def iter_results(self):
+        """FileResult 제너레이터 — 대형 state 를 RAM 적재 없이 순회(T-014, 리포트 스트리밍용)."""
+        yield from self._iter_existing()
+
     def load_results(self) -> ScanResult:
+        """전체 결과를 리스트로 적재 — 소형 스캔 전용.
+
+        대형 스캔(T-014: state 7.7GB)은 여기서 MemoryError 가 난다 —
+        리포트·집계는 iter_results() 스트리밍을 쓸 것.
+        """
         result = ScanResult()
         result.files = list(self._iter_existing())
         return result

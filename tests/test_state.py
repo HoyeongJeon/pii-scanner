@@ -93,3 +93,17 @@ def test_load_results_roundtrips_corp_filtered(tmp_path):
     st.record(fr)
     res = ScanState("cf1", base_dir=str(tmp_path)).load_results()
     assert res.files[0].corp_filtered == 4     # 구형 파일은 d.get 기본값 0
+
+
+def test_iter_results_streams_same_records_as_load_results(tmp_path):
+    # T-014: 대형 state 는 load_results() 대신 iter_results() 스트리밍으로 소비
+    st = ScanState("it1", base_dir=str(tmp_path))
+    st.record(FileResult(path="/d/a.txt", hits=[_hit()]))
+    st.record(FileResult(path="/d/locked.docx", encrypted=True))
+    st.record(FileResult(path="/d/bad.pdf", error="추출 실패: X"))
+    st2 = ScanState("it1", base_dir=str(tmp_path))
+    streamed = list(st2.iter_results())
+    loaded = st2.load_results().files
+    assert [fr.path for fr in streamed] == [fr.path for fr in loaded]
+    assert streamed[0].hits[0].snippet == "900101-1******"
+    assert streamed[1].encrypted and streamed[2].error

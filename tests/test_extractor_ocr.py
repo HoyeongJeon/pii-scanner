@@ -32,3 +32,45 @@ def test_ocr_image_reads_korea():
     norm = ocr_image(img).replace(" ", "")
     assert "홍길동" in norm
     assert "900101-1234567" in norm
+
+
+def test_ocr_image_normalizes_unsupported_formats_and_modes():
+    """MPO(폰 연사 JPEG)·CMYK 등 pytesseract 미지원 포맷/모드는 정규화 후 OCR — 예외 없이 통과 (T-013).
+
+    실측: ★업무폴더 오류 621건 중 498건이 MPO TypeError, 27건이 CMYK PNG 저장 실패.
+    """
+    mpo = Image.new("RGB", (80, 24), "white")
+    mpo.format = "MPO"                    # PIL이 폰 사진을 여는 실제 상태 재현
+    ocr_image(mpo)                        # TypeError 없이 통과해야 함
+
+    cmyk = Image.new("CMYK", (80, 24))
+    ocr_image(cmyk)                       # OSError(cannot write mode CMYK as PNG) 없이 통과
+
+
+def test_appledouble_sidecar_is_unsupported(tmp_path):
+    """맥 리소스포크 사이드카(._xxx.jpg, AppleDouble)는 이미지가 아님 — UnsupportedFormat으로 건너뜀."""
+    import pytest
+    from pii_scanner.core.extractors import UnsupportedFormat
+    p = tmp_path / "._사진.jpg"
+    p.write_bytes(b"\x00\x05\x16\x07" + b"\x00" * 60)
+    with pytest.raises(UnsupportedFormat):
+        ImageOcrExtractor().extract(str(p))
+
+
+def test_ocr_image_downscales_huge_images(monkeypatch):
+    """초대형 이미지는 OCR 전에 축소 — 수천만 화소 사진이 장당 수백 MB를 먹어 OOM 기여(T-012).
+
+    A4 300dpi(2480x3508, ~8.7MP) 문서 스캔은 무손실 통과해야 한다.
+    """
+    import pytesseract
+    seen = []
+    monkeypatch.setattr(pytesseract, "image_to_string",
+                        lambda img, **kw: seen.append(img.size) or "")
+
+    ocr_image(Image.new("RGB", (9000, 6000)))    # 54MP 사진
+    w, h = seen[-1]
+    assert w * h <= 4000 * 4000                  # 상한(16MP) 이하로 축소
+    assert abs(w / h - 9000 / 6000) < 0.01      # 종횡비 보존(정수 반올림 오차 허용)
+
+    ocr_image(Image.new("RGB", (2480, 3508)))    # A4 300dpi 문서
+    assert seen[-1] == (2480, 3508)              # 문서 스캔은 원본 그대로

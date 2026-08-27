@@ -17,11 +17,16 @@ class Summary:
     by_type: dict = field(default_factory=dict)
 
 
-def summarize(result: ScanResult) -> Summary:
+def summarize_iter(files) -> Summary:
+    """FileResult 이터러블을 1회 순회로 집계 — 대형 state 스트리밍용(T-014).
+
+    list 를 통째로 받는 summarize() 와 달리 제너레이터를 그대로 소비하므로
+    수백만 hit 규모 스캔도 O(1) 메모리로 집계된다.
+    """
     s = Summary()
-    s.total_files = len(result.files)
     by_type: dict[PiiType, dict[str, int]] = {}
-    for fr in result.files:
+    for fr in files:
+        s.total_files += 1
         if fr.encrypted:
             s.encrypted_files += 1
             continue                       # 암호화 파일은 hits 없음
@@ -40,3 +45,7 @@ def summarize(result: ScanResult) -> Summary:
     s.masking_rate = 100.0 if total == 0 else s.masked / total * 100.0
     s.by_type = by_type
     return s
+
+
+def summarize(result: ScanResult) -> Summary:
+    return summarize_iter(result.files)

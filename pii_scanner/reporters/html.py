@@ -3,7 +3,12 @@ from __future__ import annotations
 from jinja2 import Environment
 
 from pii_scanner.core.models import ScanResult, Status
-from pii_scanner.reporters.summary import summarize
+from pii_scanner.reporters.budget import RowBudget
+from pii_scanner.reporters.summary import Summary, summarize
+
+# 탐지 목록 표 행 상한 — 대형 스캔(hit 수천만 건)에서 HTML 이 수 GB 로 커지는 것 방지.
+# 초과분은 생략 안내만 남긴다(전체 데이터는 report.xlsx findings / state JSONL).
+MAX_HTML_HITS = 10_000
 
 # autoescape=True: 스캔된 파일경로/스니펫에 포함될 수 있는 <, >, &, " 를
 # 자동 이스케이프해 리포트 HTML 인젝션(XSS)·레이아웃 깨짐을 방지한다.
@@ -45,6 +50,9 @@ th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}
 <tr><td>{{ path }}</td><td>{{ ptype }}</td><td>{{ masked }}</td><td>{{ status }}</td><td>{{ loc }}</td></tr>
 {% endfor %}
 </table>
+{% if hits_skipped %}
+<p>표시 한도 초과로 {{ hits_skipped }}건 생략 — 전체 목록은 report.xlsx(findings)를 참조.</p>
+{% endif %}
 {% if encrypted %}
 <h2>🔒 암호화로 건너뛴 파일 (스캔 못 함)</h2>
 <table><tr><th>파일</th></tr>
@@ -57,27 +65,41 @@ th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}
 )
 
 
-def write_html(result: ScanResult, out_path: str) -> None:
-    s = summarize(result)
+def write_html_stream(files, out_path: str, summary: Summary,
+                      max_hits: int = MAX_HTML_HITS) -> None:
+    """FileResult 이터러블을 1회 순회하며 report.html 을 쓴다(T-014).
+
+    RAM 에 쌓는 것은 상한 이하의 탐지 목록 행·파일별 노출 건수·암호화 목록뿐이라
+    대형 스캔에서도 메모리가 유계다. 집계는 summarize_iter 결과를 summary 로 받는다
+    (이터러블이 1회성 제너레이터일 수 있어 내부에서 재순회하지 않는다).
+    """
+    budget = RowBudget(summary, max_hits)   # 엑셀과 같은 우선순위 규칙을 공유한다
     top = []
     hits = []
     encrypted = []
-    for fr in result.files:
+    for fr in files:
         if fr.encrypted:
             encrypted.append(fr.path)
         n = sum(1 for h in fr.hits if h.status is Status.EXPOSED)
         if n:
             top.append((fr.path, n))
         for h in fr.hits:
+            if not budget.allow(h):
+                continue
             hits.append((fr.path, h.pii_type.value, h.snippet, h.status.value,
                          h.location or ""))
     top.sort(key=lambda x: x[1], reverse=True)
     html = _TEMPLATE.render(
-        s=s,
-        by_type=[(t.value, b) for t, b in s.by_type.items()],
+        s=summary,
+        by_type=[(t.value, b) for t, b in summary.by_type.items()],
         top=top[:20],
         hits=hits,
+        hits_skipped=budget.skipped,
         encrypted=encrypted,
     )
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
+
+
+def write_html(result: ScanResult, out_path: str) -> None:
+    write_html_stream(result.files, out_path, summarize(result))

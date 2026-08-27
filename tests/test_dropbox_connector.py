@@ -279,7 +279,8 @@ def test_iter_batches_drives_scan_parallel_end_to_end(tmp_path, monkeypatch):
     conn = DropboxConnector(dbx, "/팀", state=st)
     result = scan_parallel(conn, ScanConfig(), state=st, max_workers=4)
 
-    assert sorted(fr.path for fr in result.files) == ["/팀/a.txt", "/팀/b.txt", "/팀/c.txt"]
+    # state 경로는 반환에 누적하지 않는다(T-012 램 절감) — 결과 검증은 아래 state 기준
+    assert result.files == []
     # 재기록 없이 각 1회 + 최종 커서 저장
     recorded = sorted(fr.path for fr in
                       ScanState("e2e", base_dir=str(tmp_path / "state")).load_results().files)

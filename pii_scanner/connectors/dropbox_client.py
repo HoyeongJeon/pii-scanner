@@ -31,3 +31,63 @@ def make_client(creds: dict, namespace: str = "home") -> "dropbox.Dropbox":
         ns = dbx.users_get_current_account().root_info.root_namespace_id
         dbx = dbx.with_path_root(dropbox.common.PathRoot.root(ns))
     return dbx
+
+
+# ── 팀 관리자 API(Business) ───────────────────────────────────────────────────
+# 팀 스코프(team_data.member·members.read 등)를 가진 토큰으로 팀 관리자가 각 멤버 계정의
+# 파일을 as_user 로 직접 읽는다. 부서별 폴더 공유(팀 정책상 막힐 수 있음) 없이 전 부서 스캔.
+
+def make_team_client(creds: dict) -> "dropbox.DropboxTeam":
+    """팀 스코프 refresh token 으로 팀 클라이언트 생성(멤버 파일 접근·멤버 조회용).
+
+    앱에 팀 스코프가 없으면 team_* 엔드포인트가 AuthError 로 실패한다.
+    """
+    return dropbox.DropboxTeam(
+        oauth2_refresh_token=creds["refresh_token"], app_key=creds["app_key"])
+
+
+def list_team_members(team: "dropbox.DropboxTeam") -> list[dict]:
+    """팀 멤버 전체를 페이지네이션 처리해 {member_id, email, name, status} 목록으로 반환."""
+    res = team.team_members_list_v2()
+    raw = list(res.members)
+    while res.has_more:
+        res = team.team_members_list_continue_v2(res.cursor)
+        raw += res.members
+    out = []
+    for m in raw:
+        p = m.profile
+        out.append({
+            "member_id": p.team_member_id,
+            "email": p.email,
+            "name": p.name.display_name if getattr(p, "name", None) else "",
+            "status": getattr(getattr(p, "status", None), "_tag", "?"),
+        })
+    return out
+
+
+def find_member(team: "dropbox.DropboxTeam", *, email: str | None = None,
+                name: str | None = None) -> dict:
+    """이메일(정확·대소문자 무시) 또는 이름(부분 일치)으로 멤버 1명 해석.
+
+    0명이면 조회 실패, 2명 이상이면 모호 — 둘 다 ValueError(이메일로 지정 유도).
+    """
+    if not email and not name:
+        raise ValueError("email 또는 name 중 하나는 지정해야 합니다")
+    hits = []
+    for m in list_team_members(team):
+        if email and m["email"].lower() == email.lower():
+            hits.append(m)
+        elif name and not email and name in m["name"]:
+            hits.append(m)
+    if not hits:
+        raise ValueError(f"팀 멤버를 찾을 수 없습니다: email={email!r} name={name!r}")
+    if len(hits) > 1:
+        raise ValueError(
+            f"이름 '{name}' 에 {len(hits)}명이 매칭됩니다 — 이메일로 지정하세요: "
+            f"{[h['email'] for h in hits]}")
+    return hits[0]
+
+
+def member_client(team: "dropbox.DropboxTeam", member_id: str) -> "dropbox.Dropbox":
+    """특정 팀 멤버로서(as_user, Select-User 헤더) 파일에 접근하는 사용자 클라이언트."""
+    return team.as_user(member_id)

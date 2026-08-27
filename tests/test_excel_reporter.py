@@ -39,6 +39,41 @@ def test_excel_findings_include_location_column(tmp_path):
     assert rows[1][header.index("위치")] == "Sheet1!C5"
 
 
+def test_excel_stream_caps_findings_and_notes_skipped(tmp_path):
+    # T-014: findings 가 상한(Excel 행 한도)을 넘으면 생략 + summary 에 생략 건수 기록
+    from pii_scanner.reporters.excel import write_excel_stream
+    from pii_scanner.reporters.summary import summarize
+    sr = ScanResult()
+    fr = FileResult(path="/x/many.txt")
+    for i in range(5):
+        fr.hits.append(PiiHit(PiiType.PHONE, Status.EXPOSED, f"010-****-{i:04d}",
+                              0, 13, Confidence.CONFIRMED, RiskLevel.HIGH))
+    sr.files.append(fr)
+    out = tmp_path / "r.xlsx"
+    write_excel_stream(iter(sr.files), str(out), summarize(sr), max_findings=3)
+    wb = openpyxl.load_workbook(str(out))
+    rows = list(wb["findings"].iter_rows(values_only=True))
+    assert len(rows) == 1 + 3                       # 헤더 + 상한 3행
+    summary = {str(r[0]): r[1] for r in wb["summary"].iter_rows(values_only=True) if r[0]}
+    assert summary["노출(EXPOSED)"] == 5            # 집계는 생략과 무관하게 전체
+    skipped = [v for k, v in summary.items() if "생략" in k]
+    assert skipped == [2]
+
+
+def test_excel_stream_consumes_generator_once(tmp_path):
+    # 스트리밍 입력(1회성 제너레이터)으로도 4개 시트가 온전히 생성돼야 한다
+    from pii_scanner.reporters.excel import write_excel_stream
+    from pii_scanner.reporters.summary import summarize
+    sr = _result()
+    sr.files.append(FileResult(path="/x/locked.docx", encrypted=True))
+    out = tmp_path / "r.xlsx"
+    write_excel_stream(iter(sr.files), str(out), summarize(sr))
+    wb = openpyxl.load_workbook(str(out))
+    assert set(wb.sheetnames) == {"findings", "errors", "summary", "encrypted"}
+    assert [r[0] for r in wb["encrypted"].iter_rows(values_only=True)][1:] == ["/x/locked.docx"]
+    assert [r[0] for r in wb["errors"].iter_rows(values_only=True)][1:] == ["/x/bad.txt"]
+
+
 def test_excel_summary_shows_corp_filtered(tmp_path):
     sr = _result()
     sr.files[0].corp_filtered = 7
@@ -47,3 +82,30 @@ def test_excel_summary_shows_corp_filtered(tmp_path):
     wb = openpyxl.load_workbook(str(out))
     rows = {str(r[0]): r[1] for r in wb["summary"].iter_rows(values_only=True) if r[0]}
     assert rows["법인등록번호 오탐 제거"] == 7
+
+
+def test_excel_stream_keeps_key_pii_rows_when_cap_reached(tmp_path):
+    """상한이 차도 고유식별정보 행은 남아야 한다 — 연락처류가 앞자리를 다 차지해도(T-017 후속).
+
+    실측: 어느 대형 스캔에서 hit 의 94%가 이메일·유선전화였고, 파일 순서대로 채우자
+    주민등록번호 노출 행의 79%가 엑셀에서 생략됐다.
+    """
+    from pii_scanner.reporters.excel import write_excel_stream
+    from pii_scanner.reporters.summary import summarize
+    sr = ScanResult()
+    noisy = FileResult(path="/x/contacts.csv")
+    for i in range(10):
+        noisy.hits.append(PiiHit(PiiType.EMAIL, Status.EXPOSED, f"a{i}@ex***.com", 0, 12,
+                                 Confidence.CONFIRMED, RiskLevel.MEDIUM))
+    late = FileResult(path="/x/late.xlsx")
+    late.hits.append(PiiHit(PiiType.RRN, Status.EXPOSED, "900101-1******", 0, 13,
+                            Confidence.CONFIRMED, RiskLevel.CRITICAL))
+    sr.files.extend([noisy, late])
+
+    out = tmp_path / "r.xlsx"
+    write_excel_stream(iter(sr.files), str(out), summarize(sr), max_findings=3)
+
+    wb = openpyxl.load_workbook(str(out))
+    rows = list(wb["findings"].iter_rows(values_only=True))[1:]
+    assert "주민등록번호" in [r[2] for r in rows]      # 뒤에 나와도 반드시 수록
+    assert len(rows) == 3                              # 상한 자체는 그대로 지킨다

@@ -14,6 +14,10 @@ class PiiType(str, Enum):
     EMAIL = "이메일"
 
 
+# 고유식별정보(D-001) — PIPA 시행령 제19조. 리포트 상한이 차도 이 종류는 먼저 수록한다.
+KEY_PII_TYPES = (PiiType.RRN, PiiType.FOREIGN, PiiType.PASSPORT, PiiType.DRIVER)
+
+
 class RiskLevel(str, Enum):
     CRITICAL = "최상"   # 고유식별정보
     HIGH = "높음"       # 휴대폰

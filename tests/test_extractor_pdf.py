@@ -46,6 +46,30 @@ def test_scanned_pdf_ocr_fallback(tmp_path):
     assert "900101-1234567" in norm
 
 
+def test_multipage_scanned_pdf_ocr_streams_pages(tmp_path, monkeypatch):
+    """여러 페이지 스캔본은 한 장씩 변환·OCR해야 한다 — 전체 일괄 변환은 대형 PDF에서 OOM(T-011)."""
+    pdf = tmp_path / "multi.pdf"
+    c = canvas.Canvas(str(pdf), pagesize=(1100, 320))
+    for _ in range(3):
+        c.drawImage(ImageReader(FIXTURE_PNG), 0, 0, width=1100, height=320)
+        c.showPage()
+    c.save()
+
+    calls = []
+    real = pdf2image.convert_from_path
+
+    def spy(path, *args, **kwargs):
+        calls.append((kwargs.get("first_page"), kwargs.get("last_page")))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(pdf2image, "convert_from_path", spy)
+
+    text = PdfExtractor().extract(str(pdf))
+    norm = text.replace(" ", "")
+    assert norm.count("홍길동") == 3          # 세 페이지 모두 OCR됨
+    assert calls == [(1, 1), (2, 2), (3, 3)]  # 호출마다 정확히 한 페이지만 요청
+
+
 def test_thin_text_layer_triggers_ocr(tmp_path):
     """표지에 소량 텍스트(<300자)가 있는 스캔본도 OCR을 타고, 텍스트+OCR이 합쳐져야 한다."""
     pdf = tmp_path / "thin.pdf"
@@ -59,6 +83,36 @@ def test_thin_text_layer_triggers_ocr(tmp_path):
     assert "doc-2026-001" in norm     # 텍스트 레이어 보존(합치기)
     assert "홍길동" in norm            # OCR 발동
     assert "900101-1234567" in norm   # OCR 발동
+
+
+def test_corrupt_pdf_falls_back_to_ocr(tmp_path, monkeypatch):
+    """pdfminer가 파싱 실패하는 비표준/손상 PDF는 OCR 폴백으로 살린다(T-013 — poppler가 더 관대).
+
+    실측: PDFSyntaxError 25건 중 일부·PSEOF 6건은 poppler로는 렌더 가능한 실제 PDF.
+    """
+    from pdfminer.pdfparser import PDFSyntaxError
+    import pii_scanner.core.extractors.pdf as pdfmod
+
+    pdf = tmp_path / "corrupt.pdf"
+    c = canvas.Canvas(str(pdf), pagesize=(1100, 320))
+    c.drawImage(ImageReader(FIXTURE_PNG), 0, 0, width=1100, height=320)
+    c.save()
+
+    def boom(path):
+        raise PDFSyntaxError("No /Root object!")
+    monkeypatch.setattr(pdfmod, "extract_text", boom)
+
+    text = PdfExtractor().extract(str(pdf))
+    assert "홍길동" in text.replace(" ", "")
+
+
+def test_empty_pdf_gets_clean_error(tmp_path):
+    """0바이트 파일(업로드 실패 잔재)은 명확한 에러 메시지로 — 실측 PDFSyntaxError 25건 중 다수."""
+    import pytest
+    p = tmp_path / "empty.pdf"
+    p.write_bytes(b"")
+    with pytest.raises(ValueError, match="빈 파일"):
+        PdfExtractor().extract(str(p))
 
 
 def test_pdf_extract_located_labels_pages(tmp_path):
