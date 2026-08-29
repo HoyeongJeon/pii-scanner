@@ -54,7 +54,10 @@ class FileResult:
     hits: list[PiiHit] = field(default_factory=list)
     error: str | None = None
     encrypted: bool = False
+    unreadable: bool = False  # 순회 자체를 못 한 경로(폴더 접근 실패) — '스캔한 파일'이 아니다
     corp_filtered: int = 0   # 법인등록번호 열 오탐으로 제거된 hit 수 (summary 집계용)
+    # 일부 탐지기만 실패한 파일 — 나머지 hit 은 유효하지만 '전부 봤다'고 할 수 없다.
+    partial_detection: list[str] = field(default_factory=list)
 
 
 @dataclass

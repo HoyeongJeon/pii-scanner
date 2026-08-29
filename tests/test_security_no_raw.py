@@ -24,17 +24,34 @@ RAW_SECRETS = [
 ]
 
 
+_BODY = (
+    "홍길동 900101-1234568\n"
+    "메일 hong.gildong@example.com\n"
+    "폰 010-1234-5678\n"
+    "여권 M12345678\n"
+    "면허 11-12-345678-90\n"
+    "대표 02-123-4567\n"
+)
+
+
 def _make_src(tmp_path):
+    """정상 파일 + '추출이 실패하는' 파일들.
+
+    실패 경로를 안 만들면 errors 시트가 항상 비어서, 정작 유출이 일어나는 자리를
+    이 회귀 테스트가 통과시킨다 — 실제로 그랬다. 서드파티 파싱 라이브러리는 실패한 파일의
+    내용을 예외 메시지에 박는다(xlrd: "Expected BOF record; found b'900101-1'").
+    아래 파일들은 전부 확장자와 내용이 어긋나 추출 단계에서 실패한다.
+    """
     src = tmp_path / "src"; src.mkdir()
-    (src / "a.txt").write_text(
-        "홍길동 900101-1234568\n"
-        "메일 hong.gildong@example.com\n"
-        "폰 010-1234-5678\n"
-        "여권 M12345678\n"
-        "면허 11-12-345678-90\n"
-        "대표 02-123-4567\n",
-        encoding="utf-8",
-    )
+    (src / "a.txt").write_text(_BODY, encoding="utf-8")
+    raw = _BODY.encode("utf-8")
+    # 첫 바이트가 곧 유출량이다 — xlrd 는 파일 앞 8바이트를 예외 메시지에 그대로 박는다.
+    # 주민번호로 시작하게 두어 '본문을 실으면 반드시 티가 나는' 픽스처로 만든다.
+    (src / "payroll.xls").write_bytes(b"900101-1234568,hong.gildong,3000000\n")
+    (src / "roster.xlsx").write_bytes(raw)         # zip 이 아님 → BadZipFile
+    (src / "report.docx").write_bytes(raw)
+    (src / "doc.hwpx").write_bytes(raw)
+    (src / "scan.pdf").write_bytes(raw)
     return src
 
 
@@ -51,6 +68,7 @@ def test_excel_has_no_raw_pii(tmp_path):
         for c in row
         if c.value is not None
     )
+    assert wb["errors"].max_row > 1, "errors 시트가 비면 유출 지점을 검사하지 않은 것이다"
     for secret in RAW_SECRETS:
         assert secret not in blob, f"원문 유출: {secret}"
 
@@ -74,6 +92,7 @@ def test_state_jsonl_has_no_raw_pii(tmp_path):
     st = ScanState("sec", base_dir=str(tmp_path / "state"))
     scan(LocalFsConnector([str(src)]), ScanConfig(), state=st)
     blob = open(st.jsonl_path, encoding="utf-8").read()
+    assert "추출 실패" in blob, "실패 경로가 만들어지지 않으면 이 테스트는 아무것도 검증하지 않는다"
     for secret in RAW_SECRETS:
         assert secret not in blob, f"상태파일 원문 유출: {secret}"
 
@@ -120,3 +139,28 @@ def test_dropbox_temp_is_outside_any_sync_folder():
         # 시스템 temp(동기화 폴더 밖). 'Dropbox' 경로 조각이 들어가면 안 됨.
         assert local.startswith(tempfile.gettempdir())
         assert "Dropbox" not in local and "dropbox" not in os.path.dirname(local).lower()
+
+
+def _error_strings(out_path):
+    import openpyxl
+    ws = openpyxl.load_workbook(str(out_path))["errors"]
+    return [str(row[1]) for row in ws.iter_rows(min_row=2, values_only=True) if row[1]]
+
+
+def test_error_reasons_never_carry_third_party_message_bodies(tmp_path):
+    """사유는 예외 '타입'만. 파싱 라이브러리는 실패한 파일의 내용을 메시지에 박는다 —
+    xlrd 의 getbof 는 파일 앞 8바이트를 넣고, 그 자리에 주민번호·이메일이 올 수 있다.
+    유출량은 라이브러리마다 다르므로 고정 문자열 목록이 아니라 '모양'으로 막는다."""
+    import re
+
+    src = _make_src(tmp_path)
+    result = scan_paths([str(src)], ScanConfig())
+    out = tmp_path / "r.xlsx"
+    write_excel(result, str(out))
+
+    reasons = _error_strings(out)
+    assert reasons, "실패 파일이 없으면 이 테스트는 아무것도 검증하지 않는다"
+    for reason in reasons:
+        assert not re.search(r"\d{4}", reason), f"사유에 숫자열이 실렸다(원문 유출 의심): {reason}"
+        assert "@" not in reason, f"사유에 이메일 흔적이 실렸다: {reason}"
+        assert reason.split(":")[0] in ("추출 실패", "탐지 일부 실패", "접근 실패"), reason

@@ -6,14 +6,18 @@ from collections.abc import Iterator
 
 from pii_scanner.core.checksum import rrn_checksum_valid, corp_reg_checksum_valid
 from pii_scanner.core.detectors.base import Detector
-from pii_scanner.core.masking import count_masks, count_digits, strip_separators
+from pii_scanner.core.masking import (
+    count_masks, count_digits, strip_separators, SEPARATOR_CLASS,
+)
 from pii_scanner.core.models import (
     PiiHit, PiiType, RiskLevel, Status, Confidence,
 )
 
-# 6자리(생년월일) + 구분자 + 7자리(성별1 + 일련6) — 숫자 또는 마스킹문자
+# 6자리(생년월일) + 구분자 + 7자리(성별1 + 일련6) — 숫자 또는 마스킹문자.
+# 구분자는 masking.SEPARATOR_CLASS 단일 출처 — 정규식이 매치하는 구분자를 strip_separators 가
+# 반드시 지우게 묶어 둔다(어긋나면 길이 검사에서 진짜 번호가 조용히 드롭된다).
 _PAT = re.compile(
-    r"(?<![0-9A-Za-z])([0-9*●■○xX＊]{6})[-\s]?([0-9*●■○xX＊]{7})(?![0-9])"
+    rf"(?<![0-9A-Za-z])([0-9*●■○xX＊]{{6}}){SEPARATOR_CLASS}?([0-9*●■○xX＊]{{7}})(?![0-9])"
 )
 # 이 탐지기가 인정하는 성별코드(숫자일 때)
 _GENDER_OK = set("1234")

@@ -28,9 +28,9 @@ def test_breadcrumb_present_during_extraction_and_removed_after(monkeypatch, tmp
             return "", None
 
     monkeypatch.setattr(scanner, "get_extractor", lambda p: FakeExtractor())
-    scanner.process_file(FakeSF("/부서폴더/문서.pdf"), [])
+    scanner.process_file(FakeSF("/dept/doc.pdf"), [])
 
-    assert seen["during"] == ["/부서폴더/문서.pdf"]   # 추출 중 흔적 존재
+    assert seen["during"] == ["/dept/doc.pdf"]   # 추출 중 흔적 존재
     assert list(bcdir.iterdir()) == []                       # 종료 후 제거
 
 
@@ -44,7 +44,7 @@ def test_no_breadcrumb_when_env_unset(monkeypatch, tmp_path):
             return "", None
 
     monkeypatch.setattr(scanner, "get_extractor", lambda p: FakeExtractor())
-    scanner.process_file(FakeSF("/부서폴더/문서.pdf"), [])
+    scanner.process_file(FakeSF("/dept/doc.pdf"), [])
 
     assert list(bcdir.iterdir()) == []                       # env 미설정 → 무동작
 
@@ -59,7 +59,7 @@ def test_breadcrumb_removed_even_on_extractor_error(monkeypatch, tmp_path):
             raise RuntimeError("추출 폭발")
 
     monkeypatch.setattr(scanner, "get_extractor", lambda p: BoomExtractor())
-    fr = scanner.process_file(FakeSF("/부서폴더/문서.pdf"), [])
+    fr = scanner.process_file(FakeSF("/dept/doc.pdf"), [])
 
     assert fr.error and "추출 실패" in fr.error               # 에러 격리는 그대로
     assert list(bcdir.iterdir()) == []                       # 예외에도 흔적 정리(finally)

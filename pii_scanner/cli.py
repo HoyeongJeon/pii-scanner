@@ -4,12 +4,19 @@ import argparse
 import os
 import sys
 
+from pii_scanner import __version__
 from pii_scanner.config import ScanConfig
 from pii_scanner.core.detectors import ALL_DETECTOR_KEYS
 from pii_scanner.core.scanner import scan_parallel, scan_paths
 from pii_scanner.reporters.excel import write_excel, write_excel_stream
 from pii_scanner.reporters.html import write_html, write_html_stream
-from pii_scanner.reporters.summary import summarize, summarize_iter
+from pii_scanner.reporters.summary import stamp_scan_meta, summarize, summarize_iter
+
+# 종료코드: 0 정상 / 1 실행 불가(자격증명·경로 오류) / 2 argparse 사용법 오류(파서가 씀)
+# / 3 스캔은 됐지만 읽지 못한 폴더가 있음 / 130 사용자 중단(SIGINT).
+# 3을 쓰는 이유: 2는 argparse 가 이미 쓰고 있어(--disable 오타 등) 자동화가
+# "인자를 잘못 줬다"와 "커버리지에 구멍이 있다"를 구분할 수 없다.
+EXIT_ACCESS_ERROR = 3
 
 # 주의: dropbox SDK 에 의존하는 모듈(dropbox_conn/dropbox_client)은 최상단에서 import 하지
 # 않는다. cli 는 로컬 스캔의 진입점이기도 하므로, 여기서 import 하면 [dropbox] extra 미설치
@@ -25,34 +32,44 @@ def _validate_keys(parser, keys):
         )
 
 
-def _write_reports(result, out_dir):
+def _write_reports(result, out_dir, config):
     os.makedirs(out_dir, exist_ok=True)
-    write_excel(result, os.path.join(out_dir, "report.xlsx"))
-    write_html(result, os.path.join(out_dir, "report.html"))
-    _print_summary(summarize(result), out_dir)
+    s = stamp_scan_meta(summarize(result), config)
+    # 리포트 3종이 같은 Summary 를 쓰도록 먼저 만든다 — 출처·커버리지 진술이 엇갈리면 안 된다.
+    write_excel(result, os.path.join(out_dir, "report.xlsx"), summary=s)
+    write_html(result, os.path.join(out_dir, "report.html"), summary=s)
+    _print_summary(s, out_dir)
+    return s
 
 
-def _write_reports_from_state(state, out_dir):
+def _write_reports_from_state(state, out_dir, config):
     """state JSONL 을 스트리밍(3회 순회: 집계·excel·html)으로 리포트 생성 — O(1) 메모리.
 
     load_results() 경유는 대형 스캔에서 MemoryError(T-014) — dropbox 경로는 항상 이걸 쓴다.
     """
     os.makedirs(out_dir, exist_ok=True)
-    s = summarize_iter(state.iter_results())
+    s = stamp_scan_meta(summarize_iter(state.iter_results()), config)
     write_excel_stream(state.iter_results(), os.path.join(out_dir, "report.xlsx"), s)
     write_html_stream(state.iter_results(), os.path.join(out_dir, "report.html"), s)
     _print_summary(s, out_dir)
+    return s
 
 
 def _print_summary(s, out_dir):
     print(f"스캔 완료: 파일 {s.total_files}건, 노출 {s.exposed}건, "
           f"암호화 건너뜀 {s.encrypted_files}건, 추출실패 {s.error_files}건")
     print(f"리포트: {out_dir}/report.xlsx, report.html")
+    if s.unreadable_paths:
+        # 폴더를 못 읽은 것을 조용히 넘기면 "그 폴더엔 개인정보 없음"으로 오독된다.
+        print(f"⛔ 경고: 폴더 {s.unreadable_paths}건을 읽지 못해 스캔 범위에서 빠졌습니다 "
+              f"— report.xlsx 의 errors 시트에서 '접근 실패' 행을 확인하세요.",
+              file=sys.stderr)
 
 
 def _cmd_local(argv):
     parser = argparse.ArgumentParser(
         prog="pii-scan", description="개인정보(PII) 노출 스캐너 (읽기 전용)")
+    parser.add_argument("--version", action="version", version=f"pii-scan {__version__}")
     parser.add_argument("roots", nargs="+", help="스캔할 폴더 경로(1개 이상)")
     parser.add_argument("--out", required=True, help="리포트 출력 폴더")
     parser.add_argument("--disable", action="append", default=[],
@@ -62,10 +79,10 @@ def _cmd_local(argv):
     args = parser.parse_args(argv)
     _validate_keys(parser, args.disable)
     _validate_keys(parser, args.enable)
-    result = scan_paths(args.roots, ScanConfig(
-        disabled=set(args.disable), enabled=set(args.enable)))
-    _write_reports(result, args.out)
-    return 0
+    config = ScanConfig(disabled=set(args.disable), enabled=set(args.enable))
+    result = scan_paths(args.roots, config)
+    s = _write_reports(result, args.out, config)
+    return EXIT_ACCESS_ERROR if s.unreadable_paths else 0
 
 
 def _cmd_auth(argv):
@@ -125,17 +142,17 @@ def _cmd_dropbox(argv):
         scan_parallel(connector, config, state=state, max_workers=args.workers)
     except KeyboardInterrupt:
         print("\n중단됨 — 진행상황 저장됨. 같은 --scan-id 로 다시 실행하면 이어서 진행합니다.")
-        _write_reports_from_state(state, args.out)
+        _write_reports_from_state(state, args.out, config)
         return 130          # POSIX: SIGINT 종료코드
     except dropbox.exceptions.ApiError as exc:
         print(f"Dropbox 경로/네임스페이스 확인 필요 — --root '{args.root}' "
               f"(--namespace {args.namespace})를 찾을 수 없거나 접근 불가합니다.\n  ({exc})",
               file=sys.stderr)
-        _write_reports_from_state(state, args.out)
+        _write_reports_from_state(state, args.out, config)
         return 1
     # 리포트는 상태파일 기준으로 그린다 — scan_parallel() 반환값엔 '이번 실행분'만 담기지만(재개 시
     # 이미 끝난 파일은 건너뜀), 리포트는 이전 실행 누적분까지 포함한 '전체'여야 하기 때문.
-    _write_reports_from_state(state, args.out)
+    _write_reports_from_state(state, args.out, config)
     return 0
 
 

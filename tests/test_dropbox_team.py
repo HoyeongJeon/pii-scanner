@@ -47,8 +47,8 @@ class FakeTeam:
 
 def _two_dept():
     return [
-        _member("id1", "dept90@example.com", "연구지원팀"),
-        _member("id2", "dept20@example.com", "연구기획팀"),
+        _member("id1", "dept90@example.com", "Alpha Support"),
+        _member("id2", "dept20@example.com", "Alpha Planning"),
     ]
 
 
@@ -59,7 +59,7 @@ def test_list_members_single_page():
     assert [m["email"] for m in out] == ["dept90@example.com", "dept20@example.com"]
     assert out[0] == {
         "member_id": "id1", "email": "dept90@example.com",
-        "name": "연구지원팀", "status": "active",
+        "name": "Alpha Support", "status": "active",
     }
 
 
@@ -82,14 +82,14 @@ def test_find_by_email_is_case_insensitive():
 
 def test_find_by_name_partial():
     team = FakeTeam([_Page(_two_dept())])
-    m = dropbox_client.find_member(team, name="연구지원")
+    m = dropbox_client.find_member(team, name="Alpha Sup")
     assert m["email"] == "dept90@example.com"
 
 
 def test_find_ambiguous_name_raises():
     team = FakeTeam([_Page(_two_dept())])
     with pytest.raises(ValueError, match="매칭"):
-        dropbox_client.find_member(team, name="연구")   # 둘 다 '연구' 포함
+        dropbox_client.find_member(team, name="Alpha")   # 둘 다 'Alpha' 포함
 
 
 def test_find_missing_raises():

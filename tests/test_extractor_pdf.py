@@ -128,3 +128,50 @@ def test_pdf_extract_located_labels_pages(tmp_path):
     text, locator = PdfExtractor().extract_located(str(pdf))
     assert locator.label(text.index("first page filler")) == "p.1 L1"
     assert locator.label(text.index("second-page-marker")).startswith("p.2 ")
+
+
+def test_ocr_pages_get_real_page_numbers(monkeypatch, tmp_path):
+    """스캔본 PDF 의 탐지 위치가 전부 p.1 로 찍히던 회귀 — 페이지 경계는 \x0c 여야 한다."""
+    import sys, types
+    import pii_scanner.core.extractors.pdf as pdfmod
+
+    f = tmp_path / "scan.pdf"; f.write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(pdfmod, "extract_text", lambda p: "")      # 텍스트 레이어 없음 → OCR 폴백
+
+    fake = types.SimpleNamespace(
+        pdfinfo_from_path=lambda path, timeout=None: {"Pages": 3},
+        convert_from_path=lambda path, first_page, last_page, timeout=None: [first_page],
+    )
+    monkeypatch.setitem(sys.modules, "pdf2image", fake)
+    # pdf.py 는 호출 시점에 sys.modules 에서 ocr_image 를 집는다 — 거기에 맞춰 패치한다.
+    ocrmod = sys.modules["pii_scanner.core.extractors.ocr"]
+    monkeypatch.setattr(ocrmod, "ocr_image", lambda page: f"{page}쪽 머리\n홍길동 900101-1234568")
+
+    text, locator = pdfmod.PdfExtractor().extract_located(str(f))
+    assert text.count("\x0c") == 2                                  # 3페이지 → 경계 2개
+    from pii_scanner.core.detectors.rrn import RrnDetector
+    labels = [locator.label(h.start) for h in RrnDetector(reference_year=2026).find(text)]
+    assert labels == ["p.1 L2", "p.2 L2", "p.3 L2"]
+
+
+def test_thin_text_layer_and_ocr_are_joined_by_a_page_break(monkeypatch, tmp_path):
+    """텍스트 레이어가 얇아 OCR 을 덧붙일 때도 이음매는 페이지 경계여야 한다 —
+    "\n" 으로 이으면 OCR 첫 페이지가 텍스트 레이어와 같은 페이지로 합쳐진다."""
+    import sys, types
+    import pii_scanner.core.extractors.pdf as pdfmod
+
+    f = tmp_path / "thin.pdf"; f.write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(pdfmod, "extract_text", lambda p: "표지\n담당 홍길동")   # 300자 미만
+    fake = types.SimpleNamespace(
+        pdfinfo_from_path=lambda path, timeout=None: {"Pages": 2},
+        convert_from_path=lambda path, first_page, last_page, timeout=None: [first_page],
+    )
+    monkeypatch.setitem(sys.modules, "pdf2image", fake)
+    ocrmod = sys.modules["pii_scanner.core.extractors.ocr"]
+    monkeypatch.setattr(ocrmod, "ocr_image", lambda page: f"{page}쪽\n홍길동 900101-1234568")
+
+    text, locator = pdfmod.PdfExtractor().extract_located(str(f))
+    assert text.count("\x0c") == 2          # 텍스트↔OCR 이음매 1 + OCR 페이지 사이 1
+    from pii_scanner.core.detectors.rrn import RrnDetector
+    labels = [locator.label(h.start) for h in RrnDetector(reference_year=2026).find(text)]
+    assert labels == ["p.2 L2", "p.3 L2"]   # 텍스트 레이어가 p.1

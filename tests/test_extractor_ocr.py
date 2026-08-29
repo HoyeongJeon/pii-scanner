@@ -19,6 +19,16 @@ def test_class_importable_without_pytesseract(monkeypatch):
         assert fresh.ImageOcrExtractor is not None # ⑤ 지연 import면 클래스 멀쩡히 로드됨
     finally:
         sys.modules["pii_scanner.core.extractors.ocr"] = orig # ⑥ 원본 복구(다른 테스트 격리)
+        # ⑦ 부모 패키지 속성도 되돌린다. import_module 이 pii_scanner.core.extractors.ocr
+        # 속성을 '새 모듈'로 바꿔 놓는데, sys.modules 만 복구하면 둘이 갈린다 —
+        # 그러면 `import ... as ocrmod` 는 죽은 모듈을, `from ... import ocr_image` 는
+        # 원본을 집어서 이후 테스트의 ocr_image 모킹이 조용히 무력화된다.
+        import pii_scanner.core.extractors as _pkg
+        _pkg.ocr = orig
+    # 이 테스트가 남긴 상태가 다른 테스트를 오염시키지 않는지 여기서 못박는다.
+    assert sys.modules["pii_scanner.core.extractors.ocr"] is orig
+    import pii_scanner.core.extractors as pkg
+    assert pkg.ocr is orig, "부모 패키지 속성이 새 모듈을 가리키면 이후 ocr_image 모킹이 무력화된다"
 
 def test_ocr_extracts_text():
     text = ImageOcrExtractor().extract(FIXTURE)

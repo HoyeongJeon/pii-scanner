@@ -129,3 +129,50 @@ def test_pure_rrn_not_corp_suspect():
 def test_masked_hit_never_corp_suspect():
     h = find_one("900101-1******")          # 부분 마스킹 — 체크섬 검증 불가
     assert h.corp_suspect is False
+
+
+# ---------------------------------------------------------------------------
+# 구분자 매트릭스 — "줄 안쪽 서식 문자는 잡고, 줄/셀 경계는 안 잡는다".
+# 잡아야 할 것과 잡으면 안 되는 것을 같은 표에 두어 어느 쪽으로 틀어져도 깨지게 한다.
+# ---------------------------------------------------------------------------
+import pytest as _pytest
+from pii_scanner.core.detectors.foreign import ForeignDetector as _Foreign
+from pii_scanner.core.detectors.driver import DriverDetector as _Driver
+
+_SEP_CASES = [
+    ("hyphen", "-", 1), ("space", " ", 1), ("tab", "\t", 1), ("nbsp", "\xa0", 1),
+    ("newline", "\n", 0), ("cr", "\r", 0), ("formfeed", "\x0c", 0), ("vtab", "\v", 0),
+    ("line_sep", " ", 0), ("para_sep", " ", 0),
+]
+
+
+@_pytest.mark.parametrize("name,sep,expected", _SEP_CASES)
+def test_rrn_separator_matrix(name, sep, expected):
+    text = "900101" + sep + "1123459"
+    assert len(list(RrnDetector(reference_year=2026).find(text))) == expected
+
+
+@_pytest.mark.parametrize("name,sep,expected", _SEP_CASES)
+def test_foreign_separator_matrix(name, sep, expected):
+    # ForeignDetector 는 RrnDetector 의 _PAT 를 상속한다 — 영향이 전파되는지 함께 고정.
+    text = "900101" + sep + "5123456"
+    assert len(list(_Foreign(reference_year=2026).find(text))) == expected
+
+
+@_pytest.mark.parametrize("name,sep,expected", _SEP_CASES)
+def test_driver_separator_matrix(name, sep, expected):
+    text = sep.join(["11", "22", "334455", "66"])
+    assert len(list(_Driver().find(text))) == expected
+
+
+def test_crossline_match_does_not_swallow_the_real_rrn_after_it():
+    """개행을 구분자에서 빼면, 줄을 넘겨 매치된 뒤 길이 검사로 버려지는 바람에
+    바로 뒤의 진짜 번호까지 통째로 놓치던 미탐이 사라진다."""
+    hits = list(RrnDetector(reference_year=2026).find(".111111\n9001011******"))
+    assert len(hits) == 1
+    assert hits[0].snippet == "900101-1******"
+
+
+def test_crossline_match_does_not_swallow_the_real_driver_number_after_it():
+    hits = list(_Driver().find("34\n56\n789012\n11-12-345678-90"))
+    assert len(hits) == 1

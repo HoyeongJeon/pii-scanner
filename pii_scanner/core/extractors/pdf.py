@@ -56,11 +56,14 @@ class PdfExtractor(Extractor):
                 # 페이지 단위 격리 — 멈추거나(timeout) 터지는 한 페이지가 파일 전체·스캔을 막지 않게.
                 parts.append(f"[페이지 {i} OCR 실패: {type(exc).__name__}]")
         if pages_to_ocr < n_pages:
-            parts.append(f"[OCR 생략: 전체 {n_pages}p 중 {pages_to_ocr}p만 처리(상한 {OCR_MAX_PAGES}, T-015)]")
-        ocr_text = "\n".join(parts)
-        return f"{text}\n{ocr_text}" if text.strip() else ocr_text
+            parts.append(f"[OCR 생략: 전체 {n_pages}p 중 {pages_to_ocr}p만 처리(상한 {OCR_MAX_PAGES})]")
+        # 페이지 경계는 \x0c(form feed) — PageLineLocator 가 이걸로 페이지를 센다.
+        # "\n" 으로 이으면 스캔본 PDF 전체가 1페이지가 되어 모든 탐지 위치가 p.1 로 찍히고
+        # 줄 번호도 문서 누적값이 된다(3쪽 2번째 줄 → p.1 L6). 담당자가 찾아갈 수 없다.
+        ocr_text = "\x0c".join(parts)
+        return f"{text}\x0c{ocr_text}" if text.strip() else ocr_text
 
     def extract_located(self, path: str) -> tuple[str, Locator]:
         text = self.extract(path)
-        # pdfminer가 넣는 \x0c 페이지 경계 기반. OCR 합본(스캔본) 구간은 page/line 근사.
+        # 페이지 경계(\x0c) 기반 — pdfminer 텍스트는 pdfminer 가, OCR 합본은 extract() 가 넣는다.
         return text, PageLineLocator(text)

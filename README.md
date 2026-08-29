@@ -13,7 +13,7 @@
 | 종류 | 위험등급 | 검증 |
 |---|---|---|
 | 주민등록번호 | 🔴 최상 | 생년월일 + 성별코드 + **체크섬** (오탐 거의 0) |
-| 외국인등록번호 | 🔴 최상 | 생년월일 + 성별코드(5~8) |
+| 외국인등록번호 | 🔴 최상 | 생년월일 + 성별코드(5~8) — **기본 OFF** (`--enable foreign`) |
 | 여권번호 | 🔴 최상 | 형식 (추정) |
 | 운전면허번호 | 🔴 최상 | 형식 (추정) |
 | 휴대폰 | 🟠 높음 | 형식 |
@@ -21,6 +21,10 @@
 | 유선/대표번호 | 🟢 낮음 | 형식 |
 
 각 항목은 **노출(🔴)** vs **마스킹(🟢)**으로 구분되며, 부분 마스킹은 보수적으로 노출로 처리합니다.
+
+외국인등록번호는 신뢰할 체크섬이 없어 과탐이 많아 **기본 비활성**입니다 — `--enable foreign`으로 켜세요.
+리포트(summary 시트·HTML 헤더)에는 **검사하지 않은 종류가 항상 명시**되므로, 끄고 스캔한 결과를
+"없음"으로 오독할 일은 없습니다.
 
 ## 동작 방식
 
@@ -51,20 +55,21 @@ pip install -e ".[dev,dropbox]"          # + Dropbox API 커넥터 (읽기 전�
 ```bash
 # 1) 합성 데모 데이터 생성 후 스캔 (안전하게 체험)
 python examples/make_demo_data.py demo_data
-pii-scan demo_data --out report_out
+pii-scan demo_data --out /tmp/pii-report
 
 # editable 설치 없이 모듈로 실행해도 동일
-python -m pii_scanner.cli demo_data --out report_out
+python -m pii_scanner.cli demo_data --out /tmp/pii-report
 
 # 2) 여러 폴더 동시 스캔
-pii-scan ./폴더A ./폴더B --out report_out
+pii-scan ./폴더A ./폴더B --out /tmp/pii-report
 
-# 3) 특정 탐지기 끄기 (키: rrn foreign passport driver phone landline email)
-pii-scan ./문서 --out report_out --disable landline --disable email
+# 3) 특정 탐지기 끄기 / 켜기 (키: rrn foreign passport driver phone landline email)
+pii-scan ./문서 --out /tmp/pii-report --disable landline --disable email
+pii-scan ./문서 --out /tmp/pii-report --enable foreign      # 기본 OFF 인 외국인등록번호 켜기
 
 # 4) Dropbox 스캔 (읽기 전용 · 중단 후 재개 가능)
 pii-scan auth --app-key <본인 Dropbox 앱 키> --profile work        # 최초 1회 — refresh token 저장
-pii-scan dropbox --root "/스캔할 폴더" --out report_out --profile work
+pii-scan dropbox --root "/스캔할 폴더" --out /tmp/pii-report --profile work
 ```
 
 Dropbox 스캔 참고:
@@ -74,8 +79,10 @@ Dropbox 스캔 참고:
 - 자격증명은 `~/.config/pii-scanner/`에 소유자 전용(0600)으로 저장됩니다.
 
 산출물:
-- `report_out/report.xlsx` — 상세 (findings / errors / summary 시트)
-- `report_out/report.html` — 요약 대시보드 (KPI 카드 + 종류별·Top위험파일·마스킹 스니펫)
+- `/tmp/pii-report/report.xlsx` — 상세 (findings / errors / encrypted / summary 시트)
+  - `summary` 시트 첫머리에 **스캔 일시 · 도구 버전 · 검사한 종류 · 검사하지 않은 종류**가 기록됩니다.
+  - `errors` 시트의 `구분` 열이 **접근 실패**(폴더를 못 읽음)와 **파일 처리 실패**를 구분합니다.
+- `/tmp/pii-report/report.html` — 요약 대시보드 (KPI 카드 + 종류별·Top위험파일·마스킹 스니펫)
 
 ## 마스킹률 KPI
 
@@ -83,7 +90,11 @@ Dropbox 스캔 참고:
 마스킹률 = 마스킹 건수 / (노출 + 마스킹) × 100%
 ```
 
-스캔을 반복하면 마스킹률 추이로 **개선 정도**를 추적할 수 있습니다. 파일별·폴더별·PII종류별·전체로 집계됩니다.
+스캔을 반복하면 마스킹률 추이로 **개선 정도**를 추적할 수 있습니다. PII 종류별과 전체로 집계됩니다.
+
+> ⚠️ 마스킹 판정이 가능한 종류는 주민등록번호·외국인등록번호·여권번호·운전면허번호·휴대폰입니다.
+> 이메일과 유선전화는 마스킹된 표현을 탐지하지 못해 항상 '노출'로 집계되므로, 전체 마스킹률은
+> 종류 구성에 따라 낮게 나올 수 있습니다.
 
 ## 보안 원칙
 
@@ -115,13 +126,18 @@ pii_scanner/
 └── config.py         탐지 ON/OFF · 제외경로 · 확장자
 ```
 
-확장 포인트: 새 PII 종류는 `detectors/`에, 새 포맷은 `extractors/`에 파일 하나 추가하면 됩니다 (각각 `base.py`의 얇은 인터페이스만 구현).
+확장 포인트: 새 PII 종류는 `detectors/`에 파일 추가 + `detectors/__init__.py`의 레지스트리 등록,
+새 포맷은 `extractors/`에 파일 추가 + `extractors/__init__.py`의 `_MAP` + `config.ScanConfig.extensions`
+등록입니다 (각각 `base.py`의 얇은 인터페이스만 구현).
 
 ## 개발 / 테스트
 
 ```bash
 python -m pytest -q          # 전체 테스트
 ```
+
+종료코드: `0` 정상 · `1` 실행 불가(자격증명·경로 오류) · `2` 인자 오류 ·
+`3` 스캔은 됐지만 읽지 못한 폴더가 있음 · `130` 사용자 중단.
 
 테스트는 합성 데이터만 사용합니다. `tests/test_security_no_raw.py`는 **리포트에 원문 PII가 새지 않는지**를 자동 검증하는 회귀 테스트입니다.
 

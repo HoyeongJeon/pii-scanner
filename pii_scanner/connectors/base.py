@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 from pii_scanner.config import ScanConfig
+
+if TYPE_CHECKING:                      # 런타임 의존 없음(models ↔ connectors 순환 import 회피)
+    from pii_scanner.core.models import FileResult
 
 
 class SourceFile(ABC):
@@ -39,3 +43,13 @@ class Connector(ABC):
         """
         for sf in self.iter_files(config):
             yield [sf]
+
+    def iter_access_errors(self) -> Iterator["FileResult"]:
+        """순회 자체가 실패해 '스캔조차 못 한' 경로를 FileResult(unreadable=True)로 돌려준다.
+
+        기본은 없음(빈 이터레이터). 목록은 순회 도중 채워지므로 iter_files()/iter_batches()
+        를 끝까지 소비한 뒤에야 완전하다 — 소비자는 스캔 루프가 끝난 뒤에 호출할 것.
+        폴더를 못 읽었는데 '탐지 0건'으로 보고되면 감사 결과가 거짓 안심이 되므로,
+        커넥터는 순회 실패를 조용히 삼키지 말고 이 통로로 드러낸다.
+        """
+        return iter(())

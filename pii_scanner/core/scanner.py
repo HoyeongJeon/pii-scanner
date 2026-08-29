@@ -44,7 +44,15 @@ def _process_file_body(sf, detectors) -> FileResult | None:
     """다운로드→추출→탐지. 격리된 FileResult 반환(미지원 포맷은 None).
 
     예외를 밖으로 던지지 않는다 — 워커 스레드에서 호출돼도 한 파일 실패가 배치를 막지 않게.
-    추출뿐 아니라 탐지 단계의 예외도 fr.error 로 격리한다(탐지기가 던져도 워커가 죽지 않게).
+    탐지 단계는 탐지기 하나 단위로 격리한다 — 하나가 던져도 나머지 탐지기 결과는 살린다.
+
+    에러 문구에는 예외 '타입'만 남기고 본문은 싣지 않는다. 서드파티 파싱 라이브러리는
+    실패한 파일의 내용을 메시지에 그대로 박는다 — 예: xlrd 의 getbof 는
+    "Expected BOF record; found b'900101-1'" 처럼 파일 앞 8바이트를 넣는다.
+    (첫 컬럼이 주민번호인 CSV 를 .xls 로 저장한 흔한 실무 케이스에서 실제로 재현됨.)
+    그게 errors 시트와 state JSONL 로 흘러가면 "리포트 자체가 또 다른 유출본이 되지 않는다"는
+    이 도구의 핵심 약속이 정면으로 깨진다. 유출량은 라이브러리마다 다르고 예측할 수 없으므로
+    본문을 통째로 싣지 않는 것이 유일하게 안전한 규칙이다.
     """
     fr = FileResult(path=sf.logical_path)
     text: str | None = None
@@ -56,21 +64,42 @@ def _process_file_body(sf, detectors) -> FileResult | None:
         return None                            # 대상 아님 — 기록조차 안 함
     except EncryptedFileError:
         fr.encrypted = True                     # 🔒 건너뜀(실패 아님)
-    except Exception as exc:                    # 파일별 격리
-        fr.error = f"추출 실패: {type(exc).__name__}: {exc}"
+    except Exception as exc:                    # 파일별 격리 (타입만 — 본문은 원문 유출 위험)
+        fr.error = f"추출 실패: {type(exc).__name__}"
     if text is not None:
-        try:
-            hits = []
-            for det in detectors:
+        hits = []
+        failed: list[str] = []
+        for det in detectors:
+            # try 를 탐지기 루프 '안쪽'에 둔다. 밖에 두면 탐지기 하나가 던졌을 때
+            # 이미 찾아 둔 다른 탐지기의 hit 까지 통째로 버려져 그 파일이 0건이 된다.
+            try:
                 for hit in det.find(text):
                     hit.location = locator.label(hit.start)
                     hits.append(hit)
+            except Exception as exc:
+                failed.append(f"{type(det).__name__}({type(exc).__name__})")
+        try:
             kept, dropped = filter_corp_columns(hits)
             fr.hits.extend(kept)
             fr.corp_filtered = dropped
-        except Exception as exc:                # 탐지 단계도 격리 — 워커 밖으로 안 던짐
-            fr.error = f"탐지 실패: {type(exc).__name__}: {exc}"
+        except Exception as exc:                # 후처리 실패도 워커 밖으로 안 던짐
+            fr.hits.extend(hits)                # 필터만 실패 — 찾은 hit 은 살린다
+            failed.append(f"filter_corp_columns({type(exc).__name__})")
+        if failed:
+            # 부분 실패를 '성공'과 구분해 리포트에 남긴다 — 일부 종류만 못 본 파일이
+            # 조용히 '깨끗함'으로 보이면 안 된다.
+            fr.partial_detection = failed
+            fr.error = f"탐지 일부 실패: {', '.join(failed)}"
     return fr
+
+
+def _drain_access_errors(connector: Connector, result: ScanResult) -> None:
+    """순회가 끝난 뒤, 커넥터가 모아 둔 '읽지 못한 경로'를 결과에 합류시킨다.
+
+    접근 실패는 ScanResult 로만 흐른다 — state 를 쓰는 경로(Dropbox)의 커넥터는 이 통로를
+    구현하지 않으므로(base 의 빈 이터레이터 상속) state 분기를 두면 도달 불가 코드가 된다.
+    """
+    result.files.extend(connector.iter_access_errors())
 
 
 def scan(connector: Connector, config: ScanConfig, state=None) -> ScanResult:
@@ -93,6 +122,7 @@ def scan(connector: Connector, config: ScanConfig, state=None) -> ScanResult:
             state.record(fr)
         else:
             result.files.append(fr)
+    _drain_access_errors(connector, result)
     return result
 
 
@@ -123,6 +153,7 @@ def scan_parallel(connector: Connector, config: ScanConfig, state=None,
                     state.record(fr)
                 else:
                     result.files.append(fr)
+    _drain_access_errors(connector, result)
     return result
 
 

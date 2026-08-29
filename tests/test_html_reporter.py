@@ -128,3 +128,47 @@ def test_html_stream_prefers_exposed_key_pii_over_masked(tmp_path):
     write_html_stream(iter(sr.files), str(out), summarize(sr), max_hits=3)
 
     assert "800215-1******" in out.read_text(encoding="utf-8")   # 뒤에 나온 노출이 남아야
+
+
+def test_html_shows_unreadable_paths_section(tmp_path):
+    """읽지 못한 폴더는 '개인정보 없음'이 아니라는 것을 리포트가 직접 말해야 한다."""
+    from pii_scanner.core.models import FileResult, ScanResult
+    from pii_scanner.reporters.html import write_html
+
+    r = ScanResult()
+    r.files.append(FileResult(path="/인사팀/급여", error="접근 실패: 권한 없음", unreadable=True))
+    out = tmp_path / "r.html"
+    write_html(r, str(out))
+    html = out.read_text(encoding="utf-8")
+    assert "읽지 못한 폴더" in html
+    assert "/인사팀/급여" in html
+    assert "접근 실패: 권한 없음" in html
+    assert "개인정보 없음" in html            # 오독 방지 문구
+
+
+def test_html_omits_unreadable_section_when_none(tmp_path):
+    from pii_scanner.core.models import FileResult, ScanResult
+    from pii_scanner.reporters.html import write_html
+
+    r = ScanResult()
+    r.files.append(FileResult(path="/a.txt"))
+    out = tmp_path / "r.html"
+    write_html(r, str(out))
+    assert "읽지 못한 폴더" not in out.read_text(encoding="utf-8")
+
+
+def test_html_states_uncovered_types(tmp_path):
+    import datetime
+    from pii_scanner.config import ScanConfig
+    from pii_scanner.core.models import FileResult, ScanResult
+    from pii_scanner.reporters.html import write_html
+    from pii_scanner.reporters.summary import stamp_scan_meta, summarize
+
+    r = ScanResult(); r.files.append(FileResult(path="/a.txt"))
+    s = stamp_scan_meta(summarize(r), ScanConfig(), now=datetime.datetime(2026, 8, 28, 9, 30))
+    out = tmp_path / "r.html"
+    write_html(r, str(out), summary=s)
+    html = out.read_text(encoding="utf-8")
+    assert "2026-08-28T09:30:00" in html
+    assert "검사하지" in html and "외국인등록번호" in html
+    assert "확인하지 않음" in html          # "없음"으로 오독되지 않게

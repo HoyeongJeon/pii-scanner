@@ -109,3 +109,73 @@ def test_excel_stream_keeps_key_pii_rows_when_cap_reached(tmp_path):
     rows = list(wb["findings"].iter_rows(values_only=True))[1:]
     assert "주민등록번호" in [r[2] for r in rows]      # 뒤에 나와도 반드시 수록
     assert len(rows) == 3                              # 상한 자체는 그대로 지킨다
+
+
+def test_errors_sheet_separates_access_failure_from_extraction_failure(tmp_path):
+    """감사에서 '폴더를 못 열었다'와 '파일 추출이 실패했다'는 의미가 다르다 — 열로 갈라야 한다."""
+    import openpyxl
+    from pii_scanner.core.models import FileResult, ScanResult
+    from pii_scanner.reporters.excel import write_excel
+
+    r = ScanResult()
+    r.files.append(FileResult(path="/x.xls", error="추출 실패: XLRDError"))
+    r.files.append(FileResult(path="/hr", error="접근 실패: 권한 없음", unreadable=True))
+    out = tmp_path / "r.xlsx"
+    write_excel(r, str(out))
+    wb = openpyxl.load_workbook(str(out))
+    rows = list(wb["errors"].iter_rows(values_only=True))
+    assert rows[0] == ("파일경로", "사유", "구분")
+    kinds = {row[0]: row[2] for row in rows[1:]}
+    assert kinds == {"/x.xls": "파일 처리 실패", "/hr": "접근 실패"}
+    summary = {row[0]: row[1] for row in wb["summary"].iter_rows(values_only=True) if row[0]}
+    assert any("접근 실패" in k for k in summary), "summary 에 접근 실패 건수 행이 있어야 한다"
+
+
+def test_summary_omits_access_failure_row_when_none(tmp_path):
+    """0을 찍으면 순회 실패를 보고하지 않는 커넥터(Dropbox)에서 거짓 커버리지 보증이 된다."""
+    import openpyxl
+    from pii_scanner.core.models import FileResult, ScanResult
+    from pii_scanner.reporters.excel import write_excel
+
+    r = ScanResult()
+    r.files.append(FileResult(path="/a.txt"))
+    out = tmp_path / "r.xlsx"
+    write_excel(r, str(out))
+    wb = openpyxl.load_workbook(str(out))
+    keys = [row[0] for row in wb["summary"].iter_rows(values_only=True) if row[0]]
+    assert not any("접근 실패" in k for k in keys)
+
+
+def test_illegal_control_chars_in_path_do_not_kill_the_report(tmp_path):
+    """제어문자·surrogate 가 섞인 경로 때문에 리포트가 통째로 안 나오면 안 된다."""
+    import openpyxl
+    from pii_scanner.core.models import FileResult, ScanResult
+    from pii_scanner.reporters.excel import write_excel
+
+    r = ScanResult()
+    r.files.append(FileResult(path="/bad\x01name\udcff", error="접근 실패: 권한 없음",
+                              unreadable=True))
+    out = tmp_path / "r.xlsx"
+    write_excel(r, str(out))                      # 예외 없이 저장돼야 한다
+    assert openpyxl.load_workbook(str(out))["errors"].max_row == 2
+
+
+def test_summary_sheet_states_provenance_and_uncovered_types(tmp_path):
+    """감사 산출물은 '언제·어느 버전으로·무엇을 검사했나'를 스스로 진술해야 한다."""
+    import datetime, openpyxl
+    from pii_scanner.config import ScanConfig
+    from pii_scanner.core.models import FileResult, ScanResult
+    from pii_scanner.reporters.excel import write_excel
+    from pii_scanner.reporters.summary import stamp_scan_meta, summarize
+
+    r = ScanResult(); r.files.append(FileResult(path="/a.txt"))
+    s = stamp_scan_meta(summarize(r), ScanConfig(), now=datetime.datetime(2026, 8, 28, 9, 30))
+    out = tmp_path / "r.xlsx"
+    write_excel(r, str(out), summary=s)
+    rows = {row[0]: row[1] for row in
+            openpyxl.load_workbook(str(out))["summary"].iter_rows(values_only=True) if row[0]}
+    assert rows["스캔 일시"] == "2026-08-28T09:30:00"
+    assert rows["도구 버전"]
+    assert "주민등록번호" in rows["검사한 종류(이번 실행)"]
+    assert "외국인등록번호" in rows["⚠ 검사하지 않은 종류(이번 실행)"]
+    assert "--enable foreign" in rows["⚠ 검사하지 않은 종류(이번 실행)"]

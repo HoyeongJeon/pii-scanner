@@ -58,15 +58,36 @@ def test_process_file_returns_none_for_unsupported(monkeypatch):
     assert process_file(_FakeSF("/d/x.bin"), _detectors()) is None
 
 
+class _Boom:
+    def find(self, text):
+        raise RuntimeError("detector boom")
+
+
 def test_process_file_isolates_detector_exception(monkeypatch):
     # 탐지기가 예외를 던져도 process_file 은 밖으로 던지지 않고 fr.error 로 격리한다
     # (워커 스레드에서 호출되므로 — scan_parallel 의 fut.result() 를 죽이면 안 됨).
     _patch_ext(monkeypatch, {"/d/a.txt": "주민 900101-1234568"})
-    class _Boom:
-        def find(self, text):
-            raise RuntimeError("detector boom")
     fr = process_file(_FakeSF("/d/a.txt"), [_Boom()])
-    assert fr is not None and fr.error is not None and "탐지 실패" in fr.error
+    assert fr is not None and fr.error is not None and "탐지" in fr.error
+    assert fr.partial_detection == ["_Boom(RuntimeError)"]
+
+
+def test_one_throwing_detector_does_not_erase_the_other_detectors_hits(monkeypatch):
+    """try 가 탐지기 루프 '밖'에 있으면 하나가 던졌을 때 그 파일이 통째로 0건이 된다 —
+    실제로 3건 나오던 파일이 hits=[] 로 바뀌었다."""
+    from pii_scanner.core.detectors import build_detectors
+    from pii_scanner.config import ScanConfig
+
+    text = "주민 900101-1234568 / 폰 010-1234-5678 / 메일 a@example.com"
+    _patch_ext(monkeypatch, {"/d/a.txt": text})
+    good = build_detectors(ScanConfig())
+    assert len(process_file(_FakeSF("/d/a.txt"), good).hits) == 3      # 대조군
+
+    mixed = good[:1] + [_Boom()] + good[1:]
+    fr = process_file(_FakeSF("/d/a.txt"), mixed)
+    assert len(fr.hits) == 3, "던지는 탐지기 하나가 나머지 결과를 지우면 안 된다"
+    assert fr.partial_detection == ["_Boom(RuntimeError)"]
+    assert fr.error and "일부 실패" in fr.error   # 그래도 '깨끗함'으로 보이면 안 된다
 
 
 def test_process_file_sets_cell_location_for_xlsx(tmp_path):
