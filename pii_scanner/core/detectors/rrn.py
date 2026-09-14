@@ -29,6 +29,23 @@ _CENTURY = {
     "9": 1800, "0": 1800,
 }
 
+# 2020-10 부여체계 개편: 이후 신규 부여·변경분은 성별 제외 뒷 6자리가 임의번호
+# (검증번호 공식 폐지 — 행안부, 지역번호 폐지와 함께 시행). 경계는 시행(2020-10)에서
+# 출생신고 기한(1개월)만큼 앞당긴 생일 — 2020-09 출생아가 10월 신고로 신체계를 받을 수 있다.
+_NEW_ERA_MIN_BIRTH = datetime.date(2020, 9, 1)
+
+
+def _new_era_birth_possible(norm: str) -> bool:
+    """생일이 신체계(2020-10 개편) 번호를 받았을 수 있는 범위인지.
+
+    신체계 번호에는 검증번호 공식이 적용되지 않으므로, 이 범위의 생일은 체크섬 불일치를
+    드롭 근거로 쓸 수 없다. 전부 숫자인 후보에서만 호출된다(날짜 유효성은 이미 검증됨).
+    번호 '변경'자는 생일이 과거 그대로라 여기서 판별할 수 없다 — 알려진 미탐 한계.
+    """
+    century = _CENTURY.get(norm[6], 2000)
+    birth = datetime.date(century + int(norm[:2]), int(norm[2:4]), int(norm[4:6]))
+    return birth >= _NEW_ERA_MIN_BIRTH
+
 
 def _birthdate_valid(norm: str, reference_year: int) -> bool:
     """앞 6자리(YYMMDD)가 실제 달력 날짜인지, 그리고 미래 출생이 아닌지 검증한다.
@@ -90,10 +107,15 @@ class RrnDetector(Detector):
             status, conf = Status.MASKED, Confidence.CONFIRMED
         elif count_digits(norm) == 13:
             # 전부 숫자 → 체크섬으로 진위 판정
-            if self._confirmable and not rrn_checksum_valid(norm):
-                return None  # 주민번호 아님 → 드롭 (오탐 제거)
             status = Status.EXPOSED
-            if self._confirmable:
+            if self._confirmable and not rrn_checksum_valid(norm):
+                # 신체계 가능 생일이면 검증번호가 임의라 체크섬 불일치로 배제 불가 —
+                # 확정도 못 하므로 추정으로 살리고, 법인 체크섬 통과 시 열 필터 방어는 유지한다.
+                if not _new_era_birth_possible(norm):
+                    return None  # 구체계 → 주민번호 아님 → 드롭 (오탐 제거)
+                corp_suspect = corp_reg_checksum_valid(norm)
+                conf = Confidence.PRESUMED
+            elif self._confirmable:
                 # RRN 체크섬은 통과했지만 법인 체크섬도 통과하면 법인번호 의심 → 추정 강등 + 마킹
                 corp_suspect = corp_reg_checksum_valid(norm)
                 conf = Confidence.PRESUMED if corp_suspect else Confidence.CONFIRMED

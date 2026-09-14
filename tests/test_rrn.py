@@ -132,6 +132,46 @@ def test_masked_hit_never_corp_suspect():
 
 
 # ---------------------------------------------------------------------------
+# 2020-10 부여체계 개편 — 이후 신규 부여·변경분은 뒷자리 성별 제외 6자리가 임의번호
+# (검증번호 공식 폐지). 신체계가 가능한 생일이면 체크섬 불일치를 드롭 근거로 쓸 수 없다.
+# 경계는 2020-09-01: 시행(2020-10) − 출생신고 기한 1개월 버퍼.
+# ---------------------------------------------------------------------------
+
+
+def test_new_era_birth_checksum_fail_kept_as_presumed():
+    # 2021-03-15생: 체크섬 불일치지만 신체계 번호일 수 있음 → 드롭 금지, 추정 노출
+    h = find_one("2103153000000")
+    assert h.status is Status.EXPOSED
+    assert h.confidence is Confidence.PRESUMED
+    assert h.snippet == "210315-3******"
+
+
+def test_new_era_birth_checksum_fail_corp_pass_marked_suspect():
+    # 체크섬 불일치 + 법인 체크섬 통과 → 법인번호 의심 마킹(열 필터 방어 유지)
+    h = find_one("2103153000006")
+    assert h.corp_suspect is True
+    assert h.confidence is Confidence.PRESUMED
+
+
+def test_new_era_birth_checksum_pass_stays_confirmed():
+    # 신체계 생일이어도 체크섬이 맞으면 기존대로 confirmed (회귀 없음)
+    h = find_one("2103153000001")
+    assert h.status is Status.EXPOSED
+    assert h.confidence is Confidence.CONFIRMED
+
+
+def test_old_era_birth_checksum_fail_still_dropped():
+    # 2020-08-31생은 구체계로만 부여 가능 → 체크섬 불일치 = 주민번호 아님 (기존 동작 유지)
+    assert list(D.find("2008313000000")) == []
+
+
+def test_new_era_boundary_birth_kept():
+    # 2020-09-01생: 출생신고(1개월 기한)가 10월로 넘어가 신체계를 받을 수 있는 최초 생일
+    h = find_one("2009013000000")
+    assert h.confidence is Confidence.PRESUMED
+
+
+# ---------------------------------------------------------------------------
 # 구분자 매트릭스 — "줄 안쪽 서식 문자는 잡고, 줄/셀 경계는 안 잡는다".
 # 잡아야 할 것과 잡으면 안 되는 것을 같은 표에 두어 어느 쪽으로 틀어져도 깨지게 한다.
 # ---------------------------------------------------------------------------
